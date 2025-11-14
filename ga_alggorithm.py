@@ -11,33 +11,20 @@ import streamlit as st
 @dataclass
 class GAProblem:
     name: str
-    chromosome_type: str  # 'bit' or 'real'
+    chromosome_type: str  # 'bit'
     dim: int
     bounds: Tuple[float, float] | None
     fitness_fn: Callable[[np.ndarray], float]
 
 
-def make_onemax(dim: int) -> GAProblem:
-    def fitness(x: np.ndarray) -> float:
-        return float(np.sum(x))
-
-    return GAProblem(
-        name=f"OneMax ({dim} bits)",
-        chromosome_type="bit",
-        dim=dim,
-        bounds=None,
-        fitness_fn=fitness,
-    )
-
-
-# ⭐ Required Custom Problem ⭐
-def make_custom_50_of_80() -> GAProblem:
+# Custom fitness: maximum when ones = 50, max fitness = 80
+def make_custom_50_of_80():
     def fitness(x: np.ndarray) -> float:
         ones = np.sum(x)
-        return 80 - abs(ones - 50)  # max at ones = 50
+        return 80 - abs(ones - 50)   # MAX = 80 at ones=50
 
     return GAProblem(
-        name="Custom 50-of-80 Problem (max when ones = 50)",
+        name="Custom bit problem (ones=50 gives max fitness)",
         chromosome_type="bit",
         dim=80,
         bounds=None,
@@ -45,141 +32,99 @@ def make_custom_50_of_80() -> GAProblem:
     )
 
 
-def make_sphere(dim: int, lo: float, hi: float) -> GAProblem:
-    def fitness(x: np.ndarray) -> float:
-        return -float(np.sum(np.square(x)))
-    return GAProblem("Sphere", "real", dim, (lo, hi), fitness)
-
-
-def make_rastrigin(dim: int, lo: float, hi: float) -> GAProblem:
-    def rastrigin(x: np.ndarray) -> float:
-        A = 10
-        return A * len(x) + np.sum(x * x - A * np.cos(2 * np.pi * x))
-
-    def fitness(x):
-        return -rastrigin(x)
-
-    return GAProblem("Rastrigin", "real", dim, (lo, hi), fitness)
-
-
 # -------------------- GA Operators --------------------
-def init_population(problem, pop_size, rng):
-    if problem.chromosome_type == "bit":
-        return rng.integers(0, 2, size=(pop_size, problem.dim), dtype=np.int8)
-    else:
-        lo, hi = problem.bounds
-        return rng.uniform(lo, hi, size=(pop_size, problem.dim))
+def init_population(problem: GAProblem, pop_size: int, rng: np.random.Generator) -> np.ndarray:
+    return rng.integers(0, 2, size=(pop_size, problem.dim), dtype=np.int8)
 
 
-def tournament_selection(fitness, k, rng):
-    idxs = rng.integers(0, len(fitness), size=k)
-    return int(idxs[np.argmax(fitness[idxs])])
+def tournament_selection(fitness: np.ndarray, k: int, rng: np.random.Generator) -> int:
+    idxs = rng.integers(0, fitness.size, size=k)
+    best = idxs[np.argmax(fitness[idxs])]
+    return int(best)
 
 
-def one_point_crossover(a, b, rng):
-    if len(a) <= 1:
-        return a.copy(), b.copy()
-    point = rng.integers(1, len(a))
-    return np.concatenate([a[:point], b[point:]]), np.concatenate([b[:point], a[point:]])
+def one_point_crossover(a: np.ndarray, b: np.ndarray, rng: np.random.Generator):
+    point = int(rng.integers(1, a.size))
+    c1 = np.concatenate([a[:point], b[point:]])
+    c2 = np.concatenate([b[:point], a[point:]])
+    return c1, c2
 
 
-def arithmetic_crossover(a, b, rng):
-    alpha = rng.random(a.shape)
-    return alpha * a + (1 - alpha) * b, alpha * b + (1 - alpha) * a
-
-
-def bit_mutation(x, mut_rate, rng):
-    mask = rng.random(len(x)) < mut_rate
+def bit_mutation(x: np.ndarray, mut_rate: float, rng: np.random.Generator):
+    mask = rng.random(x.shape) < mut_rate
     y = x.copy()
-    y[mask] ^= 1
+    y[mask] = 1 - y[mask]
     return y
 
 
-def gaussian_mutation(x, mut_rate, sigma, rng, bounds):
-    y = x.copy()
-    mask = rng.random(len(x)) < mut_rate
-    noise = rng.normal(0, sigma, len(x))
-    y[mask] += noise[mask]
-    lo, hi = bounds
-    return np.clip(y, lo, hi)
+def evaluate(pop: np.ndarray, problem: GAProblem) -> np.ndarray:
+    return np.array([problem.fitness_fn(ind) for ind in pop], dtype=float)
 
 
-def evaluate(pop, problem):
-    return np.array([problem.fitness_fn(ind) for ind in pop])
+# -------------------- Run GA --------------------
+def run_ga(problem, pop_size, generations, crossover_rate, mutation_rate,
+           tournament_k, elitism, seed, stream_live):
 
-
-# -------------------- GA Run --------------------
-def run_ga(
-    problem,
-    pop_size,
-    generations,
-    crossover_rate,
-    mutation_rate,
-    tournament_k,
-    elitism,
-    real_sigma,
-    seed,
-    stream_live=True,
-):
     rng = np.random.default_rng(seed)
-
     pop = init_population(problem, pop_size, rng)
     fit = evaluate(pop, problem)
 
+    # containers
     chart_area = st.empty()
     best_area = st.empty()
 
     history_best, history_avg, history_worst = [], [], []
 
     for gen in range(generations):
-        best = fit.max()
-        avg = fit.mean()
-        worst = fit.min()
 
-        history_best.append(best)
-        history_avg.append(avg)
-        history_worst.append(worst)
+        best_idx = int(np.argmax(fit))
+        best_fit = float(fit[best_idx])
 
+        history_best.append(best_fit)
+        history_avg.append(float(np.mean(fit)))
+        history_worst.append(float(np.min(fit)))
+
+        # Live update
         if stream_live:
-            df = pd.DataFrame({"Best": history_best, "Average": history_avg, "Worst": history_worst})
+            df = pd.DataFrame({"Best": history_best, "Avg": history_avg, "Worst": history_worst})
             chart_area.line_chart(df)
-            best_area.markdown(f"Generation {gen+1}/{generations} — Best: **{best:.4f}**")
+            best_area.markdown(f"Generation {gen+1}/{generations} — **Best fitness = {best_fit:.2f}**")
 
         # Elitism
         E = elitism
         elite_idx = np.argpartition(fit, -E)[-E:]
-        elites = pop[elite_idx]
+        elites = pop[elite_idx].copy()
 
-        # New generation
-        new_pop = []
-        while len(new_pop) < pop_size - E:
-            p1 = pop[tournament_selection(fit, tournament_k, rng)]
-            p2 = pop[tournament_selection(fit, tournament_k, rng)]
+        # Next generation
+        next_pop = []
+
+        while len(next_pop) < pop_size - E:
+            i1 = tournament_selection(fit, tournament_k, rng)
+            i2 = tournament_selection(fit, tournament_k, rng)
+            p1, p2 = pop[i1], pop[i2]
 
             # Crossover
             if rng.random() < crossover_rate:
-                if problem.chromosome_type == "bit":
-                    c1, c2 = one_point_crossover(p1, p2, rng)
-                else:
-                    c1, c2 = arithmetic_crossover(p1, p2, rng)
+                c1, c2 = one_point_crossover(p1, p2, rng)
             else:
                 c1, c2 = p1.copy(), p2.copy()
 
             # Mutation
-            if problem.chromosome_type == "bit":
-                c1 = bit_mutation(c1, mutation_rate, rng)
-                c2 = bit_mutation(c2, mutation_rate, rng)
-            else:
-                c1 = gaussian_mutation(c1, mutation_rate, real_sigma, rng, problem.bounds)
-                c2 = gaussian_mutation(c2, mutation_rate, real_sigma, rng, problem.bounds)
+            c1 = bit_mutation(c1, mutation_rate, rng)
+            c2 = bit_mutation(c2, mutation_rate, rng)
 
-            new_pop.append(c1)
-            if len(new_pop) < pop_size - E:
-                new_pop.append(c2)
+            next_pop.append(c1)
+            if len(next_pop) < pop_size - E:
+                next_pop.append(c2)
 
-        # Add elites
-        pop = np.vstack([new_pop, elites])
+        pop = np.vstack([next_pop, elites])
         fit = evaluate(pop, problem)
 
-    return pop, fit, history_best, history_avg, history_worst
-
+    # return results
+    best_idx = int(np.argmax(fit))
+    return {
+        "best": pop[best_idx],
+        "best_fitness": fit[best_idx],
+        "final_population": pop,
+        "final_fitness": fit,
+        "history": pd.DataFrame({"Best": history_best, "Avg": history_avg, "Worst": histo
