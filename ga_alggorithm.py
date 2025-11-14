@@ -3,12 +3,19 @@ import pandas as pd
 import streamlit as st
 
 # ================================================================
-# Custom GA Problem: 80-bit chromosome, best when 50 ones (fitness=80)
+# Custom Problem: Bitstring length 80, max fitness at 50 ones
 # ================================================================
 
-def fitness_function(x: np.ndarray) -> float:
-    ones = np.sum(x)
-    return 80 - abs(ones - 50)   # Maximum = 80 when ones = 50
+class GAProblem:
+    name = "Custom Bit Pattern"
+    chromosome_type = "bit"
+    dim = 80   # requirement #3
+    bounds = None
+
+    @staticmethod
+    def fitness_fn(x: np.ndarray) -> float:
+        ones = np.sum(x)
+        return 80 - abs(ones - 50)   # requirements #2 and #4
 
 
 # ================================================================
@@ -32,125 +39,124 @@ def one_point_crossover(a, b, rng):
     )
 
 
-def bit_mutation(x, mut_rate, rng):
+def mutation(x, mut_rate, rng):
     mask = rng.random(x.shape) < mut_rate
     y = x.copy()
     y[mask] = 1 - y[mask]
     return y
 
 
-def evaluate_population(pop):
-    return np.array([fitness_function(ind) for ind in pop], dtype=float)
+def evaluate(pop):
+    return np.array([GAProblem.fitness_fn(ind) for ind in pop])
 
 
 # ================================================================
-# GA Run Function
+# GA Runner
 # ================================================================
 
-def run_ga(pop_size=300, dim=80, generations=50, cx_rate=0.9,
-           mut_rate=0.01, tournament_k=3, elitism=2, seed=42):
+def run_ga(
+    pop_size=300,       # requirement #1
+    generations=50,     # requirement #5
+    crossover_rate=0.9,
+    mutation_rate=0.01,
+    tournament_k=3,
+    elitism=2,
+    seed=42,
+):
 
     rng = np.random.default_rng(seed)
 
-    # Initial population
-    pop = init_population(pop_size, dim, rng)
-    fitness = evaluate_population(pop)
+    pop = init_population(pop_size, GAProblem.dim, rng)
+    fit = evaluate(pop)
 
-    history_best, history_avg, history_worst = [], [], []
+    history = {"Best": [], "Average": [], "Worst": []}
 
     for gen in range(generations):
 
-        # Logging
-        best_fit = np.max(fitness)
-        avg_fit = np.mean(fitness)
-        worst_fit = np.min(fitness)
+        # Record fitness stats
+        best = np.max(fit)
+        avg = np.mean(fit)
+        worst = np.min(fit)
 
-        history_best.append(best_fit)
-        history_avg.append(avg_fit)
-        history_worst.append(worst_fit)
+        history["Best"].append(best)
+        history["Average"].append(avg)
+        history["Worst"].append(worst)
 
         # Elitism
-        E = elitism
-        elite_idx = np.argpartition(fitness, -E)[-E:]
+        elite_idx = np.argpartition(fit, -elitism)[-elitism:]
         elites = pop[elite_idx].copy()
 
+        # Create new population
         new_pop = []
+        while len(new_pop) < pop_size - elitism:
 
-        # Generate new population
-        while len(new_pop) < pop_size - E:
-            p1 = pop[tournament_selection(fitness, tournament_k, rng)]
-            p2 = pop[tournament_selection(fitness, tournament_k, rng)]
+            p1 = pop[tournament_selection(fit, tournament_k, rng)]
+            p2 = pop[tournament_selection(fit, tournament_k, rng)]
 
-            # Crossover
-            if rng.random() < cx_rate:
+            if rng.random() < crossover_rate:
                 c1, c2 = one_point_crossover(p1, p2, rng)
             else:
                 c1, c2 = p1.copy(), p2.copy()
 
-            # Mutation
-            c1 = bit_mutation(c1, mut_rate, rng)
-            c2 = bit_mutation(c2, mut_rate, rng)
+            c1 = mutation(c1, mutation_rate, rng)
+            c2 = mutation(c2, mutation_rate, rng)
 
             new_pop.append(c1)
-            if len(new_pop) < pop_size - E:
+            if len(new_pop) < pop_size - elitism:
                 new_pop.append(c2)
 
-        pop = np.vstack([np.array(new_pop), elites])
-        fitness = evaluate_population(pop)
+        pop = np.vstack([new_pop, elites])
+        fit = evaluate(pop)
 
-    # Final results
-    best_idx = np.argmax(fitness)
+    best_idx = np.argmax(fit)
 
     return {
         "best": pop[best_idx],
-        "best_fitness": fitness[best_idx],
-        "history": pd.DataFrame({
-            "Best": history_best,
-            "Average": history_avg,
-            "Worst": history_worst
-        }),
+        "best_fitness": fit[best_idx],
+        "history": pd.DataFrame(history),
         "final_population": pop,
-        "final_fitness": fitness
+        "final_fitness": fit,
     }
 
 
 # ================================================================
-# Streamlit UI
+# Streamlit Interface
 # ================================================================
 
-st.title("Genetic Algorithm — Custom Bit Pattern (80 bits, best at 50 ones)")
-st.caption("Population = 300, Generations = 50, Fitness max = 80 at exactly 50 ones.")
+st.set_page_config(page_title="Genetic Algorithm", layout="wide")
+st.title("Custom Genetic Algorithm — 80-bit Pattern (Max at 50 Ones)")
 
-if st.button("Run Genetic Algorithm", type="primary"):
+st.write("""
+### Requirements Implemented:
+- Population = **300**
+- Chromosome length = **80 bits**
+- Max fitness = **80** when ones = **50**
+- Generations = **50**
+""")
+
+if st.button("Run GA", type="primary"):
 
     result = run_ga()
 
-    # Show chart
-    st.subheader("Fitness Progress")
-    st.line_chart(result["history"])
-
-    # Show best solution
-    st.subheader("Best Individual Found")
-    st.write(f"Best Fitness: {result['best_fitness']}")
-
-    bitstring = ''.join(map(str, result['best'].astype(int)))
-    st.code(bitstring)
-
-    st.write(f"Number of ones: {np.sum(result['best'])} / 80")
-
-    # Store population for table
+    # Store final results
     st.session_state["pop"] = result["final_population"]
     st.session_state["fit"] = result["final_fitness"]
 
-# ================================================================
-# Final Population Table
-# ================================================================
+    st.subheader("Fitness Progress")
+    st.line_chart(result["history"])
 
-st.subheader("Final Population (First 20)")
-if st.button("Show Final Table"):
+    st.subheader("Best Individual")
+    st.write(f"Fitness: **{result['best_fitness']}**")
+    st.write(f"Number of ones: **{np.sum(result['best'])} / 80**")
 
+    bitstring = ''.join(map(str, result["best"].astype(int)))
+    st.code(bitstring)
+
+
+st.subheader("Final Population Table")
+if st.button("Show Table"):
     if "pop" not in st.session_state:
-        st.info("Run the algorithm first.")
+        st.info("Run the GA first.")
     else:
         pop = st.session_state["pop"]
         fit = st.session_state["fit"]
